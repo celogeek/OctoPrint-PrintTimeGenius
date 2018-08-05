@@ -7,6 +7,7 @@ import octoprint.filemanager.storage
 from octoprint.printer.estimation import PrintTimeEstimator
 from octoprint.filemanager.analysis import GcodeAnalysisQueue
 from octoprint.filemanager.analysis import AnalysisAborted
+from octoprint.events import Events
 import logging
 import bisect
 import subprocess
@@ -322,7 +323,7 @@ class PrintTimeGeniusPlugin(octoprint.plugin.SettingsPlugin,
     We want to record how long it took to finish this print so that we can make
     future estimates more accurate using linear regression.
     """
-    if event == "PrintDone":
+    if event == Events.PRINT_STARTED:
       # Store the details and also the timestamp.
       if not self._settings.has(["print_history"]):
         print_history = []
@@ -385,6 +386,17 @@ class PrintTimeGeniusPlugin(octoprint.plugin.SettingsPlugin,
         self.old_on_comm(*args, **kwargs)
         self._create_estimator()
       self._printer.on_comm_file_selected = types.MethodType(new_on_comm, self._printer)
+
+    def fixCompletion(self):
+      currentProgress = dict(**self._updateProgressDataCallback())
+
+      if currentProgress.get("printTime") is not None and currentProgress.get("printTimeLeft") is not None:
+          currentProgress["completion"] = currentProgress["printTime"] * 100.00 / (currentProgress["printTime"] + currentProgress["printTimeLeft"])
+
+      return self._dict(**currentProgress)
+
+    self._printer._stateMonitor._on_get_progress = types.MethodType(fixCompletion, self._printer)
+
     for line in self._settings.get(["printer_config"]):
       self._current_config += line
 
