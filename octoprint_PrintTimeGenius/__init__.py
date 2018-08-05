@@ -3,6 +3,7 @@ from __future__ import absolute_import
 from __future__ import division
 
 import octoprint.plugin
+import octoprint.util
 import octoprint.filemanager.storage
 from octoprint.printer.estimation import PrintTimeEstimator
 from octoprint.filemanager.analysis import GcodeAnalysisQueue
@@ -290,6 +291,7 @@ class PrintTimeGeniusPlugin(octoprint.plugin.SettingsPlugin,
     self._current_history = {}
     dd = lambda: defaultdict(dd)
     self._current_config = PrinterConfig() # dict of timing-relevant config commands
+    self._repeat_timer = None
   ##~~ SettingsPlugin mixin
 
   def get_settings_defaults(self):
@@ -324,6 +326,12 @@ class PrintTimeGeniusPlugin(octoprint.plugin.SettingsPlugin,
     future estimates more accurate using linear regression.
     """
     if event == Events.PRINT_STARTED:
+      self._repeat_timer = octoprint.util.RepeatedTimer(10, self.display_progress)
+      self._repeat_timer.start()
+      self._logger.info("Print Start")
+      self._printer.commands("M117 Print Start")
+      self._printer.commands("M73 P0")
+
       # Store the details and also the timestamp.
       if not self._settings.has(["print_history"]):
         print_history = []
@@ -347,6 +355,14 @@ class PrintTimeGeniusPlugin(octoprint.plugin.SettingsPlugin,
       del print_history[MAX_HISTORY_ITEMS:]
       self._settings.set(["print_history"], print_history)
       self._settings.save()
+    elif event in (Events.PRINT_DONE, Events.PRINT_FAILED, Events.PRINT_CANCELLED):
+      if self._repeat_timer is not None:
+        self._repeat_timer.cancel()
+        self._repeat_timer = None
+        self._logger.info("Print Done")
+        self._printer.commands("M117 Print Done")
+        self._printer.commands("M73 P100")
+
 
   @octoprint.plugin.BlueprintPlugin.route("/analyze/<origin>/<path:path>", methods=["GET"]) # Different spellings
   @octoprint.plugin.BlueprintPlugin.route("/analyse/<origin>/<path:path>", methods=["GET"])
@@ -467,6 +483,17 @@ class PrintTimeGeniusPlugin(octoprint.plugin.SettingsPlugin,
     self.update_printer_config(strip_line)
     return line
 
+  ##~~ Progress hook
+  def display_progress(self):
+      currentProgress = self._printer.get_current_data().get('progress')
+      if currentProgress is None:
+          return
+      completion = currentProgress.get('completion', 0)
+      printTimeLeft = currentProgress.get('printTimeLeft', 0)
+      hour = int(printTimeLeft / 3600)
+      minute = int((printTimeLeft - hour * 3600) / 60)
+      self._printer.commands("M117 {:.2f}% {:02d}h{:02d}m".format(completion, hour, minute))
+      self._printer.commands("M73 P{:.0f}".format(completion))
   ##~~ Softwareupdate hook
 
   def get_update_information(self):
